@@ -1,0 +1,164 @@
+For solving puddle world problem with MAXQ, I use this code:
+import numpy as np
+import gym
+import copy
+
+class PuddleWorldHRLAgent:
+    def __init__(self, env, rep, alpha, gamma):
+        self.env = env
+        self.rep = rep
+        self.alpha = alpha
+        self.gamma = gamma
+        self.num_features = len(rep.get_features(env.observation_space.sample()))
+        self.V = np.zeros((self.num_features, env.action_space.n))
+        self.C = np.zeros((self.num_features, env.action_space.n, env.action_space.n))
+        self.graph = self.build_graph()
+        self.root = len(self.graph) - 1
+
+    def build_graph(self):
+        # Define the graph structure for the HRL agent
+        graph = [
+            set(),  # move_down
+            set(),  # move_up
+            set(),  # move_left
+            set(),  # move_right
+            set(),  # avoid_puddle
+            set(),  # go_to_goal
+            {0, 1, 2, 3},  # navigate
+            {4},  # avoid_puddle
+            {5},  # go_to_goal
+            {6, 7},  # root
+        ]
+        return graph
+
+    def is_primitive(self, act):
+        if act < 4:
+            return True
+        else:
+            return False
+
+    def is_terminal(self, a, done):
+        # Check if the agent has reached the goal or fallen into a puddle
+        if done:
+            return True
+        elif a == 4:  # avoid_puddle
+            return self.env.is_puddle(self.env.s)
+        elif a == 5:  # go_to_goal
+            return self.env.is_goal(self.env.s)
+        else:
+            return False
+
+    def evaluate(self, act, s):
+        if self.is_primitive(act):
+            return self.V[act, s]
+        else:
+            for j in self.graph[act]:
+                self.V[j, s] = self.evaluate(j, s)
+            Q = np.arange(0)
+            for a2 in self.graph[act]:
+                Q = np.concatenate((Q, [self.V[a2, s]]))
+            max_arg = np.argmax(Q)
+            return self.V[max_arg, s]
+
+    def greed_act(self, act, s):
+        e = 0.001
+        Q = np.arange(0)
+        possible_a = np.arange(0)
+        for act2 in self.graph[act]:
+            if self.is_primitive(act2) or (not self.is_terminal(act2, self.done)):
+                Q = np.concatenate((Q, [self.V[act2, s] + self.C[act, s, act2]]))
+                possible_a = np.concatenate((possible_a, [act2]))
+        max_arg = np.argmax(Q)
+        if np.random.rand(1) < e:
+            return np.random.choice(possible_a)
+        else:
+            return possible_a[max_arg]
+
+    def MAXQ_0(self, i, s):
+        if self.done:
+            i = self.num_features  # to end recursion
+        self.done = False
+        s_features = self.rep.get_features(s)
+        if self.is_primitive(i):
+            self.new_s, r, self.done, _ = self.env.step(i)
+            self.r_sum += r
+            self.num_of_ac += 1
+            self.V[i, s_features] += self.alpha * (r - self.V[i, s_features])
+            return 1
+        elif i <= self.root:
+            count = 0
+            while not self.is_terminal(i, self.done):
+                a = self.greed_act(i, s_features)
+                N = self.MAXQ_0(a, s_features)
+                self.V_copy = self.V.copy()
+                evaluate_res = self.evaluate(i, s_features)
+                self.C[i, s_features, a] += self.alpha * (self.gamma ** N * evaluate_res - self.C[i, s_features, a])
+                count += N
+                s_features = self.rep.get_features(self.new_s)
+            return count
+
+    def reset(self):
+        self.env.reset()
+        self.r_sum = 0
+        self.num_of_ac = 0
+        self.done = False
+
+        # get features of the initial state
+        self.new_s = self.rep.get_features(self.env.observation_space.sample())
+
+alpha = 0.2
+gamma = 1
+ 
+agent = PuddleWorldHRLAgent(env, rep, alpha, gamma)
+episodes = 5001
+sum_list = []
+for j in range(episodes):
+    agent.reset()
+    agent.MAXQ_0(8, agent.rep.get_features(env.observation_space.sample()))  # start in root
+    sum_list.append(agent.r_sum)
+    if (j % 1000 == 0):
+        print('already made', j, 'episodes')
+
+# Plot the results
+import matplotlib.pyplot as plt
+plt.plot(sum_list)
+plt.xlabel('Episode')
+plt.ylabel('Reward')
+plt.show()
+
+However, I got this error:
+---> 80 s_features = self.rep.get_features(s)
+     81 if self.is_primitive(i):
+     82     self.new_s, r, self.done, _ = self.env.step(i)
+
+File ~/Library/CloudStorage/OneDrive-UniversityofCalgary/@upperboundCompetition/gym-puddle/util/kanerva.py:54, in BaseKanervaCoder.get_features(self, data)
+     47 def get_features(self, data: np.ndarray) -> np.ndarray:
+     48     """
+     49     Gets the active features for the input data. Updates the visit counts
+     50 
+     51     :param data: input data
+     52     :return: array of active feature indexes
+     53     """
+---> 54     dist = self.distance(data)
+...
+---> 30     normed_data = data - self.observation_space.low
+     31     normed_data /= self.observation_range
+     32     return normed_data
+
+ValueError: operands could not be broadcast together with shapes (8,) (2,) 
+
+
+This is the code for rep:
+#from util.kanerva import BaseKanervaCoder
+from util.kanerva import BaseKanervaCoder
+
+num_features = 1500
+n_closest = 8
+rep = BaseKanervaCoder(env.observation_space, n_prototypes= num_features, n_closest= n_closest, random_seed= selected_seed)
+rep.get_features(obs)
+
+The output is like:
+array([408, 820, 555, 117, 286,  32, 278, 592])
+
+
+can you rewrite PuddleWorldHRLAgent to solve the problem?
